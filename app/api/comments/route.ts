@@ -5,11 +5,11 @@ export async function GET(req: NextRequest) {
   const max = parseInt(req.nextUrl.searchParams.get('max') || '50');
   try {
     const comments = await fetchUnrespondedComments(max);
-    return NextResponse.json({ ok: true, comments });
+    return NextResponse.json({ ok: true, comments, count: comments.length });
   } catch(e: any) {
-    if (e.message === 'NOT_CONNECTED') {
-      return NextResponse.json({ ok: false, error: 'NOT_CONNECTED' }, { status: 401 });
-    }
-    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
+    const status = e.message === 'NOT_CONNECTED' ? 401
+                 : e.message === 'RECONNECT_REQUIRED' ? 401
+                 : 500;
+    return NextResponse.json({ ok: false, error: e.message }, { status });
   }
 }

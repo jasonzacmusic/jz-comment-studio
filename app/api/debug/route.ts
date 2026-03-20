@@ -13,69 +13,68 @@ export async function GET() {
       found: true,
       email: rows[0].email,
       expires: new Date(Number(rows[0].expiry_date)).toISOString(),
+      expired: Date.now() > Number(rows[0].expiry_date),
       updated: rows[0].updated_at,
     } : { found: false };
   } catch(e: any) { results.token = { error: e.message }; }
 
-  // 2. Try auth
+  // 2. Auth + force refresh
   try {
     const auth = await getAuthenticatedClient();
     results.auth = 'ok';
 
     const youtube = google.youtube({ version: 'v3', auth });
 
-    // 3. Test channel info
+    // 3. Channel
     try {
       const ch = await youtube.channels.list({ part: ['snippet','statistics'], id: ['UCCI37YB3l21oq_sLoc92YfA'] });
-      const ch0 = ch.data.items?.[0];
-      results.channel = {
-        name: ch0?.snippet?.title,
-        subscribers: ch0?.statistics?.subscriberCount,
-        videoCount: ch0?.statistics?.videoCount,
-      };
+      results.channel = { name: ch.data.items?.[0]?.snippet?.title, subs: ch.data.items?.[0]?.statistics?.subscriberCount };
     } catch(e: any) { results.channel = { error: e.message }; }
 
-    // 4. Test video search
+    // 4. Recent videos
     try {
-      const s = await youtube.search.list({
-        part: ['id'], channelId: 'UCCI37YB3l21oq_sLoc92YfA',
-        type: ['video'], order: 'date', maxResults: 5,
-      });
-      const ids = (s.data.items||[]).map((i:any) => i.id?.videoId).filter(Boolean);
-      results.recentVideos = ids;
-    } catch(e: any) { results.recentVideos = { error: e.message }; }
+      const s = await youtube.search.list({ part: ['id'], channelId: 'UCCI37YB3l21oq_sLoc92YfA', type: ['video'], order: 'date', maxResults: 3 });
+      results.videoIds = (s.data.items||[]).map((i:any) => i.id?.videoId).filter(Boolean);
+    } catch(e: any) { results.videoIds = { error: e.message }; }
 
-    // 5. Test comment threads on first video
-    if (Array.isArray(results.recentVideos) && results.recentVideos.length) {
+    // 5. Comments on first video - with ALL parts
+    if (Array.isArray(results.videoIds) && results.videoIds.length) {
       try {
         const ct = await youtube.commentThreads.list({
-          part: ['snippet'], videoId: results.recentVideos[0], maxResults: 5,
+          part: ['snippet', 'replies'],
+          videoId: results.videoIds[0],
+          maxResults: 10,
+          order: 'time',
+          moderationStatus: 'published',
         });
-        results.sampleComments = (ct.data.items||[]).map((t:any) => ({
-          id: t.snippet.topLevelComment.id,
-          author: t.snippet.topLevelComment.snippet.authorDisplayName,
-          text: t.snippet.topLevelComment.snippet.textDisplay?.substring(0,80),
-          replyCount: t.snippet.totalReplyCount,
-        }));
-      } catch(e: any) { results.sampleComments = { error: e.message }; }
+        results.commentsOnFirstVideo = {
+          totalItems: ct.data.pageInfo?.totalResults,
+          returned: ct.data.items?.length,
+          sample: (ct.data.items||[]).slice(0,3).map((t:any) => ({
+            id: t.snippet?.topLevelComment?.id,
+            author: t.snippet?.topLevelComment?.snippet?.authorDisplayName,
+            authorChannelId: t.snippet?.topLevelComment?.snippet?.authorChannelId?.value,
+            text: t.snippet?.topLevelComment?.snippet?.textDisplay?.substring(0,60),
+            hasSnippet: !!t.snippet?.topLevelComment?.snippet,
+          }))
+        };
+      } catch(e: any) { results.commentsOnFirstVideo = { error: e.message }; }
     }
 
-    // 6. Test commentThreads with allThreadsRelatedToChannelId
+    // 6. Check posted_replies
     try {
-      const all = await youtube.commentThreads.list({
-        part: ['snippet'], allThreadsRelatedToChannelId: 'UCCI37YB3l21oq_sLoc92YfA', maxResults: 5,
-      });
-      results.allThreadsTest = {
-        count: all.data.items?.length,
-        sample: all.data.items?.[0]?.snippet?.topLevelComment?.snippet?.textDisplay?.substring(0,60),
-      };
-    } catch(e: any) { results.allThreadsTest = { error: e.message }; }
-
-    // 7. Check posted_replies count
-    try {
-      const posted = await sql`SELECT COUNT(*) as n FROM posted_replies`;
-      results.postedRepliesInDB = posted[0]?.n;
+      const p = await sql`SELECT COUNT(*) as n FROM posted_replies`;
+      results.postedRepliesInDB = Number(p[0]?.n);
     } catch(e: any) { results.postedRepliesInDB = { error: e.message }; }
+
+    // 7. Check token expiry AFTER refresh
+    try {
+      const rows = await sql`SELECT expiry_date FROM yt_tokens WHERE email = 'music@nathanielschool.com'`;
+      results.tokenAfterRefresh = {
+        expires: new Date(Number(rows[0]?.expiry_date)).toISOString(),
+        valid: Date.now() < Number(rows[0]?.expiry_date),
+      };
+    } catch(e: any) { results.tokenAfterRefresh = { error: e.message }; }
 
   } catch(e: any) { results.auth = { error: e.message }; }
 
