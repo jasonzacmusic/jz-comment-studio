@@ -2,6 +2,7 @@ import { google } from 'googleapis';
 import sql from './db';
 
 const CHANNEL_ID = 'UCCI37YB3l21oq_sLoc92YfA';
+const CHANNEL_HANDLE = 'nathanielmusicschool';
 
 export function getOAuthClient() {
   return new google.auth.OAuth2(
@@ -22,7 +23,6 @@ export async function getAuthenticatedClient() {
     expiry_date: Number(rows[0].expiry_date),
   });
 
-  // Refresh if expired or within 10 mins
   if (Date.now() > Number(rows[0].expiry_date) - 600000) {
     try {
       const { credentials } = await oauth2Client.refreshAccessToken();
@@ -43,6 +43,19 @@ export async function getAuthenticatedClient() {
   return oauth2Client;
 }
 
+// Check if a comment is from the channel owner (by ID or handle)
+function isOurComment(snippet: any): boolean {
+  if (!snippet) return false;
+  if (snippet.authorChannelId?.value === CHANNEL_ID) return true;
+  const url = (snippet.authorChannelUrl || '').toLowerCase();
+  const name = (snippet.authorDisplayName || '').toLowerCase().replace(/^@/, '');
+  if (url.includes(CHANNEL_HANDLE)) return true;
+  if (url.includes(CHANNEL_ID)) return true;
+  if (name === CHANNEL_HANDLE) return true;
+  if (name === 'jason zac' || name === 'jason zac - nathaniel school of music') return true;
+  return false;
+}
+
 export function extractFirstName(displayName: string): string {
   const cleaned = (displayName || '').replace(/^@/, '');
   const first = cleaned.split(/[\s._\-0-9]/)[0] || '';
@@ -58,8 +71,8 @@ export async function fetchUnrespondedComments(maxResults = 50): Promise<any[]> 
 
   const results: any[] = [];
   let nextPageToken: string | undefined;
+  let pages = 0;
 
-  // ── Use allThreadsRelatedToChannelId - works best for channel owner ──────
   do {
     try {
       const res: any = await youtube.commentThreads.list({
@@ -71,6 +84,7 @@ export async function fetchUnrespondedComments(maxResults = 50): Promise<any[]> 
       });
 
       nextPageToken = res.data.nextPageToken ?? undefined;
+      pages++;
 
       for (const thread of (res.data.items || [])) {
         const top = thread.snippet?.topLevelComment;
@@ -79,23 +93,21 @@ export async function fetchUnrespondedComments(maxResults = 50): Promise<any[]> 
         const threadId = thread.id!;
         const commentId = top.id!;
 
+        // Skip our own comments, already-replied, already-posted
+        if (isOurComment(s)) continue;
         if (postedSet.has(commentId)) continue;
-        if (s.authorChannelId?.value === CHANNEL_ID) continue;
 
         const replies = thread.replies?.comments || [];
-        const weReplied = replies.some((r: any) =>
-          r.snippet?.authorChannelId?.value === CHANNEL_ID
-        );
 
-        const isVideoComment = !!s.videoId;
-        const isCommunity = !s.videoId;
+        // Check if we've already replied in this thread
+        const weReplied = replies.some((r: any) => isOurComment(r.snippet));
 
         if (!weReplied) {
           results.push({
             id: commentId,
             threadId,
-            type: isVideoComment ? 'video_comment' : 'community_post',
-            typeLabel: isVideoComment ? 'Video Comment' : 'Community Post',
+            type: s.videoId ? 'video_comment' : 'community_post',
+            typeLabel: s.videoId ? 'Video Comment' : 'Community Post',
             videoId: s.videoId || null,
             videoTitle: s.videoId || 'Community Post',
             author: s.authorDisplayName || '',
@@ -108,18 +120,19 @@ export async function fetchUnrespondedComments(maxResults = 50): Promise<any[]> 
           });
         }
 
-        // Unanswered replies from others in this thread
+        // Unanswered replies from others
         for (const reply of replies) {
           const rs = reply.snippet;
           if (!rs) continue;
-          if (rs.authorChannelId?.value === CHANNEL_ID) continue;
+          if (isOurComment(rs)) continue;
           if (postedSet.has(reply.id!)) continue;
 
-          const ourRepliesAfter = replies.filter((r: any) =>
-            r.snippet?.authorChannelId?.value === CHANNEL_ID &&
+          // Only add if we haven't replied after this reply was posted
+          const weRepliedAfter = replies.some((r: any) =>
+            isOurComment(r.snippet) &&
             new Date(r.snippet?.publishedAt ?? 0) > new Date(rs.publishedAt ?? 0)
           );
-          if (ourRepliesAfter.length === 0) {
+          if (!weRepliedAfter) {
             results.push({
               id: reply.id!,
               threadId,
@@ -138,14 +151,14 @@ export async function fetchUnrespondedComments(maxResults = 50): Promise<any[]> 
           }
         }
 
-        if (results.length >= maxResults * 2) break;
+        if (results.length >= maxResults * 3) break;
       }
     } catch(e: any) {
       throw new Error(`Comment fetch failed: ${e.message}`);
     }
-  } while (nextPageToken && results.length < maxResults * 2);
+  } while (nextPageToken && results.length < maxResults * 3 && pages < 10);
 
-  // ── Resolve video titles in batch ────────────────────────────────────────
+  // Resolve video titles
   const uniqueVids = [...new Set(
     results.filter(r => r.videoId).map(r => r.videoId)
   )] as string[];
