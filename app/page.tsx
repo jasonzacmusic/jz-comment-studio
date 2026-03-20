@@ -63,6 +63,7 @@ export default function Home() {
       const r = await fetch(`/api/comments?max=${batchSize}`);
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
+      console.log('RAW COMMENTS SAMPLE:', JSON.stringify(d.comments.slice(0,2)));
       const mapped: Comment[] = d.comments.map((c:any) => ({...c, status:'pending', reply:''}));
       setComments(mapped);
       setLastFetch(new Date().toLocaleString());
