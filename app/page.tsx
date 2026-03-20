@@ -324,66 +324,124 @@ function CommentCard({c,onGenerate,onApprove,onPost,onSkip,onChange}:{
   onPost:()=>void; onSkip:()=>void; onChange:(t:string)=>void;
 }) {
   const tc = TYPE_CONFIG[c.type];
-  const statusColors: Record<string,string> = {pending:'#5e5e6e',generating:'#f0b429',approved:'#3dd68c',posting:'#f0b429',posted:'#3dd68c',skipped:'#3a3a45'};
-  const statusLabels: Record<string,string> = {pending:'pending',generating:'writing…',approved:'approved',posting:'posting…',posted:'✓ posted',skipped:'skipped'};
-  const bdr = c.status==='approved'?'rgba(61,214,140,.4)':c.status==='posted'?'rgba(61,214,140,.6)':'#2e2e38';
-  const op = c.status==='skipped'?0.35:1;
-  const age = timeAgo(c.publishedAt);
-  const sc = statusColors[c.status];
-  const sl = statusLabels[c.status];
+  const bdr = c.status==='approved'?'#3dd68c':c.status==='posted'?'#3dd68c':'#333340';
 
   return (
-    <div style={{background:'#18181f',border:`1px solid ${bdr}`,borderRadius:10,overflow:'hidden',opacity:op}}>
-      {/* Type badge */}
-      <div style={{background:tc.bg,borderBottom:'1px solid #2e2e38',padding:'5px 14px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-        <span style={{fontSize:10,fontWeight:700,color:tc.color,letterSpacing:.8}}>{tc.icon} {c.typeLabel.toUpperCase()}</span>
-        <span style={{fontSize:10,color:'#6b6b80'}}>{age}</span>
+    <div style={{
+      border:`1px solid ${bdr}`,
+      borderRadius:8,
+      marginBottom:4,
+      overflow:'hidden',
+      opacity: c.status==='skipped'?0.4:1,
+      fontFamily:'monospace',
+    }}>
+      {/* TOP BAR */}
+      <div style={{
+        padding:'6px 12px',
+        display:'flex',
+        justifyContent:'space-between',
+        alignItems:'center',
+        background: c.type==='video_comment'?'#1a1a10':c.type==='reply'?'#0d1620':'#120d20',
+        borderBottom:'1px solid #333340',
+      }}>
+        <span style={{fontSize:11,fontWeight:'bold',color:tc.color}}>
+          {tc.icon} {c.typeLabel}
+        </span>
+        <span style={{fontSize:10,color:'#888'}}>{timeAgo(c.publishedAt)}</span>
       </div>
 
-      {/* Reply context */}
-      {c.type==='reply'&&c.parentText&&(
-        <div style={{padding:'6px 14px',background:'#111118',borderBottom:'1px solid #2e2e38',fontSize:11,lineHeight:1.5}}>
-          <span style={{color:'#38bdf8',fontWeight:600}}>↩ {c.parentAuthor}: </span>
-          <span style={{color:'#6b6b80'}}>"{c.parentText}"</span>
+      {/* PARENT CONTEXT for replies */}
+      {c.type==='reply' && c.parentText && (
+        <div style={{padding:'5px 12px',background:'#0a0a14',borderBottom:'1px solid #222'}}>
+          <span style={{fontSize:11,color:'#38bdf8'}}>↩ {c.parentAuthor}: </span>
+          <span style={{fontSize:11,color:'#777'}}>"{c.parentText}"</span>
         </div>
       )}
 
-      {/* Body */}
-      <div style={{padding:'12px 14px',display:'flex',gap:12,alignItems:'flex-start',borderBottom:'1px solid #2e2e38'}}>
-        <div style={{width:32,height:32,borderRadius:'50%',background:'#2e2e38',display:'flex',alignItems:'center',justifyContent:'center',color:tc.color,fontSize:15,fontWeight:700,flexShrink:0,fontFamily:'serif'}}>
-          {(c.firstName||c.author||'?').charAt(0).toUpperCase()}
-        </div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontWeight:600,fontSize:12.5,color:'#ffffff',marginBottom:2}}>{c.author}</div>
-          {c.videoTitle&&c.type!=='community_post'&&(
-            <div style={{fontSize:10,color:'#6b6b80',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginBottom:5}}>📹 {c.videoTitle}</div>
+      {/* COMMENT BODY */}
+      <div style={{padding:'10px 12px',background:'#111118',borderBottom:'1px solid #222'}}>
+        <div style={{
+          fontSize:12,
+          fontWeight:'bold',
+          color:'#ffffff',
+          marginBottom:4,
+        }}>
+          {c.author}
+          {c.videoTitle && c.type!=='community_post' && (
+            <span style={{fontWeight:'normal',fontSize:10,color:'#666',marginLeft:8}}>
+              on: {c.videoTitle.substring(0,50)}
+            </span>
           )}
-          <div style={{fontSize:13,lineHeight:1.6,color:'#d0d0e0'}}>{c.text}</div>
-          {c.likes>0&&<div style={{fontSize:10,color:'#6b6b80',marginTop:4}}>👍 {c.likes}</div>}
         </div>
-        <div style={{fontSize:9,padding:'3px 9px',borderRadius:20,textTransform:'uppercase',letterSpacing:.5,fontWeight:600,flexShrink:0,background:sc+'25',color:sc,animation:c.status==='generating'?'pulse 1.4s infinite':undefined}}>
-          {sl}
+        <div style={{
+          fontSize:13,
+          color:'#dddddd',
+          lineHeight:1.5,
+          wordBreak:'break-word',
+          whiteSpace:'pre-wrap',
+        }}>
+          {c.text || '(no text)'}
         </div>
+        {c.likes>0 && <div style={{fontSize:10,color:'#666',marginTop:4}}>👍 {c.likes}</div>}
       </div>
 
-      {/* Reply zone */}
-      {c.status!=='skipped'&&c.status!=='posted'?(
-        <div style={{padding:'12px 14px',display:'flex',flexDirection:'column',gap:8,background:'#13131a'}}>
-          <textarea rows={2} value={c.reply} onChange={e=>onChange(e.target.value)}
-            placeholder="Generate or type reply..."
-            style={{fontSize:12.5,lineHeight:1.6,minHeight:58,background:'#1e1e28',color:'#e0e0f0',border:'1px solid #2e2e38',borderRadius:7,padding:'8px 10px',resize:'vertical',fontFamily:'DM Mono,monospace',outline:'none'}}/>
-          <div style={{display:'flex',gap:7}}>
-            <button onClick={onGenerate} style={{flex:1,background:'#1e1e28',color:'#a0a0c0',border:'1px solid #2e2e38',padding:'7px',fontSize:11}}>✨ Gen</button>
+      {/* REPLY AREA */}
+      {c.status!=='skipped' && c.status!=='posted' && (
+        <div style={{padding:'10px 12px',background:'#0c0c14'}}>
+          <textarea
+            value={c.reply}
+            onChange={e=>onChange(e.target.value)}
+            placeholder="Write or generate a reply..."
+            rows={2}
+            style={{
+              width:'100%',
+              background:'#1a1a28',
+              color:'#ffffff',
+              border:'1px solid #333',
+              borderRadius:6,
+              padding:'7px 10px',
+              fontSize:12,
+              fontFamily:'monospace',
+              lineHeight:1.5,
+              resize:'vertical',
+              display:'block',
+              marginBottom:8,
+              boxSizing:'border-box',
+            }}
+          />
+          <div style={{display:'flex',gap:6}}>
+            <button onClick={onGenerate}
+              style={{flex:1,background:'#222',color:'#ccc',border:'1px solid #444',borderRadius:6,padding:'7px',fontSize:11,cursor:'pointer'}}>
+              ✨ Generate
+            </button>
             {c.status==='approved'
-              ?<button onClick={onPost} style={{flex:2,background:'rgba(61,214,140,.15)',color:'#3dd68c',border:'1px solid rgba(61,214,140,.3)',padding:'7px',fontSize:11,fontWeight:700}}>🚀 Post</button>
-              :<button onClick={()=>onApprove(c.reply)} style={{flex:2,background:'rgba(61,214,140,.1)',color:'#3dd68c',border:'1px solid rgba(61,214,140,.2)',padding:'7px',fontSize:11}}>✓ Approve</button>}
-            <button onClick={onSkip} style={{flex:1,background:'rgba(232,93,74,.08)',color:'#e85d4a',border:'1px solid rgba(232,93,74,.2)',padding:'7px',fontSize:11}}>✗</button>
+              ? <button onClick={onPost}
+                  style={{flex:2,background:'#0d2a1a',color:'#3dd68c',border:'1px solid #3dd68c',borderRadius:6,padding:'7px',fontSize:11,fontWeight:'bold',cursor:'pointer'}}>
+                  🚀 Post Reply
+                </button>
+              : <button onClick={()=>onApprove(c.reply)}
+                  style={{flex:2,background:'#0d2a1a',color:'#3dd68c',border:'1px solid #2a5a3a',borderRadius:6,padding:'7px',fontSize:11,cursor:'pointer'}}>
+                  ✓ Approve
+                </button>
+            }
+            <button onClick={onSkip}
+              style={{flex:1,background:'#1a0d0d',color:'#e85d4a',border:'1px solid #3a2020',borderRadius:6,padding:'7px',fontSize:11,cursor:'pointer'}}>
+              ✗ Skip
+            </button>
           </div>
         </div>
-      ):c.status==='posted'?(
-        <div style={{padding:'9px 14px',fontSize:11.5,color:'#3dd68c',background:'#0d1a12'}}>✓ {c.reply}</div>
-      ):(
-        <div style={{padding:'7px 14px',fontSize:10,color:'#5e5e6e'}}>skipped</div>
+      )}
+
+      {c.status==='posted' && (
+        <div style={{padding:'8px 12px',background:'#0a1a10',fontSize:11,color:'#3dd68c'}}>
+          ✓ Reply posted: {c.reply}
+        </div>
+      )}
+
+      {c.status==='skipped' && (
+        <div style={{padding:'6px 12px',background:'#111',fontSize:10,color:'#555'}}>
+          skipped
+        </div>
       )}
     </div>
   );
