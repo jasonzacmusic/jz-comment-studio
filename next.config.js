@@ -1,4 +1,7 @@
 /** @type {import('next').NextConfig} */
-module.exports = {
-  experimental: { serverComponentsExternalPackages: ['@neondatabase/serverless'] }
+const nextConfig = {
+  experimental: {
+    serverComponentsExternalPackages: ['@neondatabase/serverless', 'googleapis']
+  }
 }
+module.exports = nextConfig
