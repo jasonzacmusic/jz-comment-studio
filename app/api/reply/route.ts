@@ -6,10 +6,9 @@ export async function POST(req: NextRequest) {
   const { comment, replyText } = await req.json();
   try {
     await postReply(comment.threadId, replyText);
-    // Store in DB so we don't show it again
     await sql`
-      INSERT INTO posted_replies (comment_id, thread_id, video_id, commenter, comment_text, reply_text)
-      VALUES (${comment.id}, ${comment.threadId}, ${comment.videoId}, ${comment.author}, ${comment.text}, ${replyText})
+      INSERT INTO posted_replies (comment_id, thread_id, video_id, comment_type, commenter, comment_text, reply_text)
+      VALUES (${comment.id}, ${comment.threadId}, ${comment.videoId || null}, ${comment.type}, ${comment.author}, ${comment.text}, ${replyText})
       ON CONFLICT (comment_id) DO NOTHING
     `;
     return NextResponse.json({ ok: true });

@@ -22,11 +22,11 @@ export async function getAuthenticatedClient() {
     expiry_date: Number(rows[0].expiry_date),
   });
 
-  // Auto-refresh if expired
+  // Auto-refresh if expired or within 1 min of expiry
   if (Date.now() > Number(rows[0].expiry_date) - 60000) {
     const { credentials } = await oauth2Client.refreshAccessToken();
     await sql`
-      UPDATE yt_tokens SET 
+      UPDATE yt_tokens SET
         access_token = ${credentials.access_token},
         expiry_date = ${credentials.expiry_date},
         updated_at = NOW()
@@ -34,80 +34,193 @@ export async function getAuthenticatedClient() {
     `;
     oauth2Client.setCredentials(credentials);
   }
-
   return oauth2Client;
 }
 
-export async function fetchUnrespondedComments(maxResults = 50) {
-  const auth = await getAuthenticatedClient();
-  const youtube = google.youtube({ version: 'v3', auth });
+// ── Extract first name from display name ──────────────────────────────────────
+export function extractFirstName(displayName: string): string {
+  const cleaned = displayName.replace(/^@/, '');
+  const first = cleaned.split(/[\s._\-0-9]/)[0] || '';
+  return /^[A-Za-z\u00C0-\u024F\u0900-\u097F]{2,15}$/.test(first) ? first : '';
+}
 
+// ── Fetch unresponded VIDEO comments ─────────────────────────────────────────
+async function fetchVideoComments(youtube: any, maxResults: number): Promise<any[]> {
   // Get recent video IDs
   const searchRes = await youtube.search.list({
     part: ['id'],
     channelId: CHANNEL_ID,
     type: ['video'],
     order: 'date',
-    maxResults: 30,
+    maxResults: 50,
   });
-  const videoIds = (searchRes.data.items || []).map(i => i.id?.videoId).filter(Boolean) as string[];
+  const videoIds = (searchRes.data.items || []).map((i: any) => i.id?.videoId).filter(Boolean);
   if (!videoIds.length) return [];
 
-  // Fetch comments in batches
+  // Fetch comment threads in batches of 5
   let allThreads: any[] = [];
-  for (let i = 0; i < videoIds.length && allThreads.length < maxResults * 2; i += 5) {
+  for (let i = 0; i < videoIds.length && allThreads.length < maxResults * 3; i += 5) {
     const batch = videoIds.slice(i, i + 5).join(',');
     try {
       const res = await youtube.commentThreads.list({
         part: ['snippet', 'replies'],
         videoId: batch,
-        maxResults: 50,
+        maxResults: 100,
         order: 'time',
       });
       allThreads = [...allThreads, ...(res.data.items || [])];
-    } catch {}
+    } catch { continue; }
   }
 
-  // Filter: no reply from channel owner
-  const unresponded = allThreads.filter(thread => {
-    const replies = thread.replies?.comments || [];
-    return !replies.some((r: any) => r.snippet?.authorChannelId?.value === CHANNEL_ID);
-  });
-
   // Get video titles
-  const uniqueVids = [...new Set(unresponded.map((t: any) => t.snippet.topLevelComment.snippet.videoId))];
+  const uniqueVids = [...new Set(allThreads.map((t: any) => t.snippet.topLevelComment.snippet.videoId))];
   const titlesRes = await youtube.videos.list({ part: ['snippet'], id: uniqueVids as string[], maxResults: 50 });
   const titleMap: Record<string, string> = {};
-  (titlesRes.data.items || []).forEach(v => { titleMap[v.id!] = v.snippet?.title || ''; });
+  (titlesRes.data.items || []).forEach((v: any) => { titleMap[v.id!] = v.snippet?.title || ''; });
 
-  // Check already-replied in our DB
-  const alreadyPosted = await sql`SELECT comment_id FROM posted_replies`;
-  const postedSet = new Set(alreadyPosted.map((r: any) => r.comment_id));
+  const results: any[] = [];
 
-  return unresponded
-    .filter((t: any) => !postedSet.has(t.snippet.topLevelComment.id))
-    .slice(0, maxResults)
-    .map((t: any) => {
-      const s = t.snippet.topLevelComment.snippet;
-      const raw = s.authorDisplayName || '';
-      const cleaned = raw.replace(/^@/, '');
-      const fn = cleaned.split(/[\s._\-0-9]/)[0] || '';
-      const isRealName = /^[A-Za-z\u00C0-\u024F\u0900-\u097F]{2,15}$/.test(fn);
-      return {
-        id: t.snippet.topLevelComment.id,
-        threadId: t.id,
+  for (const thread of allThreads) {
+    const s = thread.snippet.topLevelComment.snippet;
+
+    // Add top-level comment if channel hasn't replied
+    const replies = thread.replies?.comments || [];
+    const channelReplied = replies.some((r: any) => r.snippet?.authorChannelId?.value === CHANNEL_ID);
+
+    if (!channelReplied) {
+      results.push({
+        id: thread.snippet.topLevelComment.id,
+        threadId: thread.id,
+        type: 'video_comment',
+        typeLabel: 'Video Comment',
         videoId: s.videoId,
         videoTitle: titleMap[s.videoId] || s.videoId,
-        author: raw,
-        firstName: isRealName ? fn : '',
+        author: s.authorDisplayName || '',
+        firstName: extractFirstName(s.authorDisplayName || ''),
         text: s.textDisplay,
         likes: s.likeCount || 0,
         publishedAt: s.publishedAt,
-      };
-    });
+        parentAuthor: null,
+        parentText: null,
+      });
+    }
+
+    // Add replies from OTHER people that channel hasn't responded to
+    for (const reply of replies) {
+      const rs = reply.snippet;
+      if (rs?.authorChannelId?.value === CHANNEL_ID) continue; // skip our own replies
+      // Check if channel has replied to this specific reply
+      const channelRepliedToThis = replies.some(
+        (r: any) => r.snippet?.authorChannelId?.value === CHANNEL_ID &&
+          r.snippet?.publishedAt > rs?.publishedAt
+      );
+      if (!channelRepliedToThis) {
+        results.push({
+          id: reply.id,
+          threadId: thread.id,
+          type: 'reply',
+          typeLabel: 'Reply to Comment',
+          videoId: s.videoId,
+          videoTitle: titleMap[s.videoId] || s.videoId,
+          author: rs?.authorDisplayName || '',
+          firstName: extractFirstName(rs?.authorDisplayName || ''),
+          text: rs?.textDisplay || '',
+          likes: rs?.likeCount || 0,
+          publishedAt: rs?.publishedAt,
+          parentAuthor: s.authorDisplayName,
+          parentText: s.textDisplay?.substring(0, 80),
+        });
+      }
+    }
+  }
+
+  return results;
 }
 
-export async function postReply(threadId: string, replyText: string) {
+// ── Fetch unresponded COMMUNITY POST comments ─────────────────────────────────
+async function fetchCommunityComments(youtube: any): Promise<any[]> {
+  try {
+    // Get community posts (activities)
+    const actRes = await youtube.activities.list({
+      part: ['id', 'snippet', 'contentDetails'],
+      channelId: CHANNEL_ID,
+      maxResults: 20,
+    });
+
+    const posts = (actRes.data.items || []).filter(
+      (a: any) => a.snippet?.type === 'bulletin'
+    );
+
+    if (!posts.length) return [];
+
+    const results: any[] = [];
+    for (const post of posts.slice(0, 5)) {
+      // Community post comments use commentThreads with allThreadsRelatedToChannelId
+      try {
+        const commRes = await youtube.commentThreads.list({
+          part: ['snippet', 'replies'],
+          allThreadsRelatedToChannelId: CHANNEL_ID,
+          maxResults: 50,
+        });
+
+        for (const thread of (commRes.data.items || [])) {
+          const s = thread.snippet.topLevelComment.snippet;
+          if (s.videoId) continue; // skip video comments, only want community
+
+          const replies = thread.replies?.comments || [];
+          const channelReplied = replies.some((r: any) => r.snippet?.authorChannelId?.value === CHANNEL_ID);
+
+          if (!channelReplied) {
+            results.push({
+              id: thread.snippet.topLevelComment.id,
+              threadId: thread.id,
+              type: 'community_post',
+              typeLabel: 'Community Post',
+              videoId: null,
+              videoTitle: 'Community Post',
+              author: s.authorDisplayName || '',
+              firstName: extractFirstName(s.authorDisplayName || ''),
+              text: s.textDisplay,
+              likes: s.likeCount || 0,
+              publishedAt: s.publishedAt,
+              parentAuthor: null,
+              parentText: null,
+            });
+          }
+        }
+      } catch { continue; }
+    }
+    return results;
+  } catch {
+    return [];
+  }
+}
+
+// ── Main fetch function ───────────────────────────────────────────────────────
+export async function fetchUnrespondedComments(maxResults = 50): Promise<any[]> {
+  const auth = await getAuthenticatedClient();
+  const youtube = google.youtube({ version: 'v3', auth });
+
+  // Get already-posted replies from DB
+  const alreadyPosted = await sql`SELECT comment_id FROM posted_replies`;
+  const postedSet = new Set(alreadyPosted.map((r: any) => r.comment_id));
+
+  // Fetch all types in parallel
+  const [videoComments, communityComments] = await Promise.all([
+    fetchVideoComments(youtube, maxResults),
+    fetchCommunityComments(youtube),
+  ]);
+
+  const all = [...videoComments, ...communityComments]
+    .filter(c => !postedSet.has(c.id))
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime())
+    .slice(0, maxResults);
+
+  return all;
+}
+
+// ── Post a reply ──────────────────────────────────────────────────────────────
+export async function postReply(threadId: string, replyText: string): Promise<any> {
   const auth = await getAuthenticatedClient();
   const youtube = google.youtube({ version: 'v3', auth });
   const res = await youtube.comments.insert({
