@@ -324,68 +324,65 @@ function CommentCard({c,onGenerate,onApprove,onPost,onSkip,onChange}:{
   onPost:()=>void; onSkip:()=>void; onChange:(t:string)=>void;
 }) {
   const tc = TYPE_CONFIG[c.type];
-  const statusColors: Record<string,string> = {
-    pending:'#5e5e6e',generating:'#f0b429',approved:'#3dd68c',posting:'#f0b429',posted:'#3dd68c',skipped:'#3a3a45'
-  };
-  const statusLabels: Record<string,string> = {
-    pending:'pending',generating:'writing…',approved:'approved',posting:'posting…',posted:'✓ posted',skipped:'skipped'
-  };
-  const bdr = c.status==='approved'?'rgba(61,214,140,.35)':c.status==='posted'?'rgba(61,214,140,.5)':'#27272f';
-  const op = c.status==='skipped'?.35:1;
+  const statusColors: Record<string,string> = {pending:'#5e5e6e',generating:'#f0b429',approved:'#3dd68c',posting:'#f0b429',posted:'#3dd68c',skipped:'#3a3a45'};
+  const statusLabels: Record<string,string> = {pending:'pending',generating:'writing…',approved:'approved',posting:'posting…',posted:'✓ posted',skipped:'skipped'};
+  const bdr = c.status==='approved'?'rgba(61,214,140,.4)':c.status==='posted'?'rgba(61,214,140,.6)':'#2e2e38';
+  const op = c.status==='skipped'?0.35:1;
   const age = timeAgo(c.publishedAt);
+  const sc = statusColors[c.status];
+  const sl = statusLabels[c.status];
 
   return (
-    <div style={{background:'#15151a',border:`1px solid ${bdr}`,borderRadius:9,overflow:'hidden',opacity:op,transition:'border-color .15s'}}>
-      {/* Type badge row */}
-      <div style={{background:tc.bg,borderBottom:'1px solid #27272f',padding:'5px 14px',display:'flex',alignItems:'center',justifyContent:'space-between'}}>
-        <span style={{fontSize:10,color:tc.color,fontWeight:600,letterSpacing:.5}}>
-          {tc.icon} {c.typeLabel.toUpperCase()}
-        </span>
-        <span style={{fontSize:9,color:'#5e5e6e'}}>{age}</span>
+    <div style={{background:'#18181f',border:`1px solid ${bdr}`,borderRadius:10,overflow:'hidden',opacity:op}}>
+      {/* Type badge */}
+      <div style={{background:tc.bg,borderBottom:'1px solid #2e2e38',padding:'5px 14px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+        <span style={{fontSize:10,fontWeight:700,color:tc.color,letterSpacing:.8}}>{tc.icon} {c.typeLabel.toUpperCase()}</span>
+        <span style={{fontSize:10,color:'#6b6b80'}}>{age}</span>
       </div>
 
-      {/* Parent context for replies */}
-      {c.type==='reply' && c.parentText && (
-        <div style={{padding:'7px 14px',background:'rgba(56,189,248,.04)',borderBottom:'1px solid #1c1c23',fontSize:11,color:'#5e5e6e',lineHeight:1.45}}>
-          <span style={{color:'#38bdf8'}}>↩ Replying to {c.parentAuthor}:</span> "{c.parentText}..."
+      {/* Reply context */}
+      {c.type==='reply'&&c.parentText&&(
+        <div style={{padding:'6px 14px',background:'#111118',borderBottom:'1px solid #2e2e38',fontSize:11,lineHeight:1.5}}>
+          <span style={{color:'#38bdf8',fontWeight:600}}>↩ {c.parentAuthor}: </span>
+          <span style={{color:'#6b6b80'}}>"{c.parentText}"</span>
         </div>
       )}
 
-      {/* Comment header */}
-      <div style={{padding:'11px 14px',display:'flex',gap:11,alignItems:'flex-start',borderBottom:'1px solid #1c1c23'}}>
-        <div style={{width:30,height:30,borderRadius:'50%',background:'#1c1c23',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:'serif',fontSize:14,color:tc.color,fontWeight:700,flexShrink:0}}>
+      {/* Body */}
+      <div style={{padding:'12px 14px',display:'flex',gap:12,alignItems:'flex-start',borderBottom:'1px solid #2e2e38'}}>
+        <div style={{width:32,height:32,borderRadius:'50%',background:'#2e2e38',display:'flex',alignItems:'center',justifyContent:'center',color:tc.color,fontSize:15,fontWeight:700,flexShrink:0,fontFamily:'serif'}}>
           {(c.firstName||c.author||'?').charAt(0).toUpperCase()}
         </div>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontWeight:500,fontSize:12}}>{c.author}</div>
-          {c.videoTitle && c.type!=='community_post' && (
-            <div style={{fontSize:10,color:'#5e5e6e',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginTop:2}}>📹 {c.videoTitle}</div>
+          <div style={{fontWeight:600,fontSize:12.5,color:'#ffffff',marginBottom:2}}>{c.author}</div>
+          {c.videoTitle&&c.type!=='community_post'&&(
+            <div style={{fontSize:10,color:'#6b6b80',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',marginBottom:5}}>📹 {c.videoTitle}</div>
           )}
-          <div style={{fontSize:12.5,lineHeight:1.55,marginTop:5}}>{c.text}</div>
-          {c.likes>0 && <div style={{fontSize:10,color:'#5e5e6e',marginTop:3}}>👍 {c.likes}</div>}
+          <div style={{fontSize:13,lineHeight:1.6,color:'#d0d0e0'}}>{c.text}</div>
+          {c.likes>0&&<div style={{fontSize:10,color:'#6b6b80',marginTop:4}}>👍 {c.likes}</div>}
         </div>
-        <div style={{fontSize:9,padding:'3px 8px',borderRadius:20,textTransform:'uppercase',letterSpacing:.5,flexShrink:0,fontWeight:500,
-          background:statusColors[c.status]+'22',color:statusColors[c.status],
-          animation:c.status==='generating'?'pulse 1.4s infinite':undefined}}>
-          {statusLabels[c.status]}
+        <div style={{fontSize:9,padding:'3px 9px',borderRadius:20,textTransform:'uppercase',letterSpacing:.5,fontWeight:600,flexShrink:0,background:sc+'25',color:sc,animation:c.status==='generating'?'pulse 1.4s infinite':undefined}}>
+          {sl}
         </div>
       </div>
 
-      {/* Reply area */}
-      {c.status!=='skipped'&&c.status!=='posted' ? (
-        <div style={{padding:'11px 14px',display:'flex',flexDirection:'column',gap:9}}>
-          <textarea rows={2} value={c.reply} onChange={e=>onChange(e.target.value)} placeholder="Generate or type a reply..." style={{fontSize:12,lineHeight:1.55,minHeight:56}}/>
+      {/* Reply zone */}
+      {c.status!=='skipped'&&c.status!=='posted'?(
+        <div style={{padding:'12px 14px',display:'flex',flexDirection:'column',gap:8,background:'#13131a'}}>
+          <textarea rows={2} value={c.reply} onChange={e=>onChange(e.target.value)}
+            placeholder="Generate or type reply..."
+            style={{fontSize:12.5,lineHeight:1.6,minHeight:58,background:'#1e1e28',color:'#e0e0f0',border:'1px solid #2e2e38',borderRadius:7,padding:'8px 10px',resize:'vertical',fontFamily:'DM Mono,monospace',outline:'none'}}/>
           <div style={{display:'flex',gap:7}}>
-            <button onClick={onGenerate} style={{flex:1,background:'transparent',color:'#e4e4ec',border:'1px solid #27272f',padding:'7px 10px',fontSize:10.5}}>✨ Gen</button>
+            <button onClick={onGenerate} style={{flex:1,background:'#1e1e28',color:'#a0a0c0',border:'1px solid #2e2e38',padding:'7px',fontSize:11}}>✨ Gen</button>
             {c.status==='approved'
-              ? <button onClick={onPost} style={{flex:2,background:'rgba(61,214,140,.12)',color:'#3dd68c',border:'1px solid rgba(61,214,140,.25)',padding:'7px 10px',fontSize:10.5,fontWeight:600}}>🚀 Post</button>
-              : <button onClick={()=>onApprove(c.reply)} style={{flex:2,background:'rgba(61,214,140,.12)',color:'#3dd68c',border:'1px solid rgba(61,214,140,.25)',padding:'7px 10px',fontSize:10.5}}>✓ Approve</button>}
-            <button onClick={onSkip} style={{flex:1,background:'rgba(232,93,74,.1)',color:'#e85d4a',border:'1px solid rgba(232,93,74,.25)',padding:'7px 10px',fontSize:10.5}}>✗</button>
+              ?<button onClick={onPost} style={{flex:2,background:'rgba(61,214,140,.15)',color:'#3dd68c',border:'1px solid rgba(61,214,140,.3)',padding:'7px',fontSize:11,fontWeight:700}}>🚀 Post</button>
+              :<button onClick={()=>onApprove(c.reply)} style={{flex:2,background:'rgba(61,214,140,.1)',color:'#3dd68c',border:'1px solid rgba(61,214,140,.2)',padding:'7px',fontSize:11}}>✓ Approve</button>}
+            <button onClick={onSkip} style={{flex:1,background:'rgba(232,93,74,.08)',color:'#e85d4a',border:'1px solid rgba(232,93,74,.2)',padding:'7px',fontSize:11}}>✗</button>
           </div>
         </div>
-      ) : c.status==='posted' ? (
-        <div style={{padding:'8px 14px',fontSize:11,color:'#3dd68c'}}>✓ {c.reply}</div>
-      ) : (
+      ):c.status==='posted'?(
+        <div style={{padding:'9px 14px',fontSize:11.5,color:'#3dd68c',background:'#0d1a12'}}>✓ {c.reply}</div>
+      ):(
         <div style={{padding:'7px 14px',fontSize:10,color:'#5e5e6e'}}>skipped</div>
       )}
     </div>
