@@ -133,7 +133,7 @@ export async function fetchUnrespondedComments(maxResults = 50): Promise<any[]> 
           // Only add reply if we haven't replied to the thread after this reply was posted
           const ourRepliesAfter = replies.filter((r: any) =>
             r.snippet?.authorChannelId?.value === CHANNEL_ID &&
-            new Date(r.snippet?.publishedAt) > new Date(rs.publishedAt)
+            new Date(r.snippet?.publishedAt ?? 0) > new Date(rs.publishedAt ?? 0)
           );
           if (ourRepliesAfter.length === 0) {
             results.push({
