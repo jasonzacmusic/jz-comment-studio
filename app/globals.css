@@ -1,0 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:opsz,wght@9..144,300;9..144,700&display=swap');
+*{box-sizing:border-box;margin:0;padding:0;}
+:root{--bg:#0c0c0e;--s:#15151a;--s2:#1c1c23;--b:#27272f;--a:#f0b429;--g:#3dd68c;--r:#e85d4a;--t:#e4e4ec;--m:#5e5e6e;--rad:9px;}
+body{font-family:'DM Mono',monospace;background:var(--bg);color:var(--t);font-size:12.5px;}
