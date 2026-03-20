@@ -2,20 +2,33 @@
 import { useState, useEffect } from 'react';
 
 type CommentType = 'video_comment' | 'community_post' | 'reply';
+type Status = 'pending'|'generating'|'approved'|'posting'|'posted'|'skipped';
 
 type Comment = {
-  id: string; threadId: string; videoId: string | null; videoTitle: string;
+  id: string; threadId: string; videoId: string|null; videoTitle: string;
   type: CommentType; typeLabel: string;
   author: string; firstName: string; text: string; likes: number; publishedAt: string;
-  parentAuthor: string | null; parentText: string | null;
-  status: 'pending'|'generating'|'approved'|'posting'|'posted'|'skipped';
-  reply: string;
+  parentAuthor: string|null; parentText: string|null;
+  status: Status; reply: string;
 };
 
-const TYPE_CONFIG: Record<CommentType, { color: string; bg: string; icon: string }> = {
-  video_comment: { color: '#f0b429', bg: 'rgba(240,180,41,.12)', icon: '📹' },
-  community_post: { color: '#a78bfa', bg: 'rgba(167,139,250,.12)', icon: '📢' },
-  reply:          { color: '#38bdf8', bg: 'rgba(56,189,248,.12)',  icon: '↩️' },
+const TYPE_COLORS: Record<CommentType, string> = {
+  video_comment: '#f0b429',
+  community_post: '#a78bfa',
+  reply: '#38bdf8',
+};
+const TYPE_ICONS: Record<CommentType, string> = {
+  video_comment: '📹',
+  community_post: '📢',
+  reply: '↩️',
+};
+const STATUS_COLOR: Record<Status, string> = {
+  pending: '#666680', generating: '#f0b429', approved: '#3dd68c',
+  posting: '#f0b429', posted: '#3dd68c', skipped: '#444455',
+};
+const STATUS_LABEL: Record<Status, string> = {
+  pending: 'pending', generating: 'writing…', approved: 'approved',
+  posting: 'posting…', posted: '✓ posted', skipped: 'skipped',
 };
 
 export default function Home() {
@@ -24,385 +37,358 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [batchSize, setBatchSize] = useState(50);
   const [extra, setExtra] = useState('');
-  const [log, setLog] = useState<{t:string;m:string;c:string}[]>([]);
-  const [activeFilter, setActiveFilter] = useState<'all'|CommentType>('all');
-  const [lastFetch, setLastFetch] = useState<string|null>(null);
+  const [log, setLog] = useState<string[]>([]);
+  const [filter, setFilter] = useState<'all'|CommentType>('all');
 
-  const addLog = (m:string, c='info') => setLog(l => [...l.slice(-40), {t: new Date().toLocaleTimeString('en',{hour12:false}), m, c}]);
+  const lg = (m: string) => setLog(l => [...l.slice(-50), `[${new Date().toLocaleTimeString('en',{hour12:false})}] ${m}`]);
 
   useEffect(() => {
-    fetch('/api/auth/status').then(r=>r.json()).then(d => {
-      setConnected(d.connected);
-      if (d.lastFetch) setLastFetch(d.lastFetch);
-    });
+    fetch('/api/auth/status').then(r=>r.json()).then(d => setConnected(d.connected));
     const p = new URLSearchParams(window.location.search);
     if (p.get('connected')==='true') { setConnected(true); window.history.replaceState({},'','/'); }
-    const err = p.get('error');
-    if (err === 'access_denied') addLog('⚠ Access denied — add music@nathanielschool.com as test user at: console.cloud.google.com/auth/audience?project=jz-comment-studio', 'err');
-    else if (err) addLog('Auth error: '+err, 'err');
+    if (p.get('error')==='access_denied') lg('⚠ Add music@nathanielschool.com as test user at Google Cloud Console');
+    else if (p.get('error')) lg('Auth error: '+p.get('error'));
   }, []);
 
-  const filtered = activeFilter === 'all' ? comments : comments.filter(c => c.type === activeFilter);
+  // Update a single comment by id (avoids indexOf issue)
+  const updateComment = (id: string, patch: Partial<Comment>) =>
+    setComments(cs => cs.map(c => c.id === id ? {...c, ...patch} : c));
 
+  const filtered = filter === 'all' ? comments : comments.filter(c => c.type === filter);
   const counts = {
     all: comments.length,
     video_comment: comments.filter(c=>c.type==='video_comment').length,
     community_post: comments.filter(c=>c.type==='community_post').length,
     reply: comments.filter(c=>c.type==='reply').length,
   };
-
-  const stats = {
-    approved: comments.filter(c=>c.status==='approved').length,
-    posted: comments.filter(c=>c.status==='posted').length,
-  };
+  const approved = comments.filter(c=>c.status==='approved').length;
+  const posted = comments.filter(c=>c.status==='posted').length;
+  const done = comments.filter(c=>c.status==='posted'||c.status==='skipped').length;
+  const pct = comments.length ? Math.round(done/comments.length*100) : 0;
 
   async function fetchComments() {
     setLoading(true);
-    addLog(`Fetching up to ${batchSize} unresponded comments...`);
+    lg(`Fetching up to ${batchSize} comments...`);
     try {
       const r = await fetch(`/api/comments?max=${batchSize}`);
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
-      console.log('RAW COMMENTS SAMPLE:', JSON.stringify(d.comments.slice(0,2)));
-      const mapped: Comment[] = d.comments.map((c:any) => ({...c, status:'pending', reply:''}));
-      setComments(mapped);
-      setLastFetch(new Date().toLocaleString());
-      addLog(`✓ Loaded ${mapped.length} comments (${d.comments.filter((c:any)=>c.type==='video_comment').length} video, ${d.comments.filter((c:any)=>c.type==='reply').length} replies, ${d.comments.filter((c:any)=>c.type==='community_post').length} community)`, 'ok');
-    } catch(e:any) { addLog('✗ '+e.message, 'err'); }
+      setComments(d.comments.map((c:any) => ({...c, status:'pending', reply:''})));
+      lg(`✓ ${d.comments.length} comments loaded`);
+    } catch(e:any) { lg('✗ '+e.message); }
     setLoading(false);
   }
 
-  async function generateOne(i: number) {
-    const ci = comments.findIndex((_,idx) => idx===i);
-    setComments(cs => cs.map((c,j) => j===ci ? {...c, status:'generating'} : c));
+  async function generateOne(id: string, comment: Comment) {
+    updateComment(id, {status:'generating'});
     try {
-      const c = comments[ci];
       const r = await fetch('/api/generate', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({comment: c, extraInstructions: extra})
+        body: JSON.stringify({comment, extraInstructions: extra})
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
-      setComments(cs => cs.map((c,j) => j===ci ? {...c, status:'pending', reply:d.reply} : c));
-      addLog(`✓ ${comments[ci].firstName||comments[ci].author}: "${d.reply.substring(0,50)}"`, 'ok');
+      updateComment(id, {status:'pending', reply: d.reply});
+      lg(`✓ ${comment.firstName||comment.author}`);
     } catch(e:any) {
-      setComments(cs => cs.map((c,j) => j===ci ? {...c, status:'pending'} : c));
-      addLog('✗ '+e.message, 'err');
+      updateComment(id, {status:'pending'});
+      lg('✗ '+e.message);
     }
   }
 
   async function generateAll() {
-    const pending = comments.map((c,i)=>({c,i})).filter(({c})=>c.status==='pending'&&!c.reply);
-    if (!pending.length) return;
-    addLog(`Generating ${pending.length} replies...`);
-    for (const {i} of pending) { await generateOne(i); await new Promise(r=>setTimeout(r,200)); }
-    addLog('✓ Generation complete', 'ok');
+    const pending = comments.filter(c=>c.status==='pending'&&!c.reply);
+    lg(`Generating ${pending.length} replies...`);
+    for (const c of pending) {
+      await generateOne(c.id, c);
+      await new Promise(r=>setTimeout(r,250));
+    }
+    lg('✓ Generation complete');
   }
 
-  function approveOne(i:number, text?:string) {
-    setComments(cs => cs.map((c,j) => j===i ? {...c, status:'approved', reply:text||c.reply} : c));
-  }
-
-  function approveAll() {
-    setComments(cs => cs.map(c => c.status==='pending' && c.reply.trim() ? {...c, status:'approved'} : c));
-  }
-
-  async function postOne(i:number) {
-    const c = comments[i];
-    setComments(cs => cs.map((c,j) => j===i ? {...c, status:'posting'} : c));
+  async function postOne(comment: Comment) {
+    updateComment(comment.id, {status:'posting'});
     try {
       const r = await fetch('/api/reply', {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({comment:c, replyText:c.reply})
+        body: JSON.stringify({comment, replyText: comment.reply})
       });
       const d = await r.json();
       if (!d.ok) throw new Error(d.error);
-      setComments(cs => cs.map((c,j) => j===i ? {...c, status:'posted'} : c));
-      addLog(`✓ Posted → ${c.firstName||c.author}`, 'ok');
+      updateComment(comment.id, {status:'posted'});
+      lg(`✓ Posted → ${comment.firstName||comment.author}`);
     } catch(e:any) {
-      setComments(cs => cs.map((c,j) => j===i ? {...c, status:'approved'} : c));
-      addLog('✗ '+e.message, 'err');
+      updateComment(comment.id, {status:'approved'});
+      lg('✗ '+e.message);
     }
   }
 
   async function postApproved() {
-    const approved = comments.map((c,i)=>({c,i})).filter(({c})=>c.status==='approved');
-    addLog(`Posting ${approved.length}...`);
-    for (const {i} of approved) { await postOne(i); await new Promise(r=>setTimeout(r,700)); }
-    addLog('✓ All posted!', 'ok');
+    const toPost = comments.filter(c=>c.status==='approved');
+    lg(`Posting ${toPost.length}...`);
+    for (const c of toPost) { await postOne(c); await new Promise(r=>setTimeout(r,700)); }
+    lg('✓ All posted!');
   }
 
-  const done = comments.filter(c=>c.status==='posted'||c.status==='skipped').length;
-  const pct = comments.length ? Math.round(done/comments.length*100) : 0;
-
-  const css = `
-    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Fraunces:opsz,wght@9..144,300;9..144,700&display=swap');
-    *{box-sizing:border-box;margin:0;padding:0;}
-    body{font-family:'DM Mono',monospace;background:#0c0c0e;color:#e4e4ec;font-size:12.5px;}
-    button{cursor:pointer;font-family:'DM Mono',monospace;border:none;border-radius:8px;font-size:11.5px;font-weight:500;padding:8px 13px;transition:all .15s;}
-    button:disabled{opacity:.35;cursor:not-allowed;}
-    input,textarea,select{background:#1c1c23;border:1px solid #27272f;color:#e4e4ec;padding:8px 11px;border-radius:8px;font-family:'DM Mono',monospace;font-size:12px;outline:none;width:100%;}
-    input:focus,textarea:focus,select:focus{border-color:#f0b429;}
-    textarea{resize:vertical;line-height:1.5;}
-    ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-thumb{background:#27272f;border-radius:2px;}
-    @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-    @keyframes spin{to{transform:rotate(360deg)}}
-  `;
-
   return (
-    <>
-      <style dangerouslySetInnerHTML={{__html:css}}/>
+    <div style={{display:'flex',flexDirection:'column',height:'100vh',overflow:'hidden'}}>
 
-      {/* HEADER */}
-      <div style={{background:'#15151a',borderBottom:'1px solid #27272f',padding:'13px 24px',display:'flex',alignItems:'center',justifyContent:'space-between',position:'sticky',top:0,zIndex:100}}>
-        <div style={{fontFamily:'Fraunces,serif',fontSize:19,fontWeight:700,color:'#f0b429'}}>
-          JZ Comment Studio <span style={{color:'#5e5e6e',fontSize:11,fontFamily:'DM Mono,monospace',fontWeight:300,marginLeft:8}}>// reply at scale</span>
+      {/* ── HEADER ── */}
+      <div style={{background:'#111118',borderBottom:'1px solid #2e2e3a',padding:'12px 20px',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+        <div style={{fontFamily:'Fraunces,serif',fontSize:18,fontWeight:700,color:'#f0b429'}}>
+          JZ Comment Studio
+          <span style={{fontFamily:'DM Mono,monospace',fontSize:11,fontWeight:300,color:'#555568',marginLeft:10}}>// reply at scale</span>
         </div>
-        <div style={{display:'flex',gap:24,alignItems:'center'}}>
-          {lastFetch && <div style={{fontSize:10,color:'#5e5e6e'}}>Last fetch: {lastFetch}</div>}
-          {[['total',comments.length,'#f0b429'],['approved',stats.approved,'#3dd68c'],['posted',stats.posted,'#a78bfa']].map(([l,n,c])=>(
-            <div key={l as string} style={{textAlign:'right'}}>
-              <div style={{fontFamily:'Fraunces,serif',fontSize:17,fontWeight:700,color:c as string}}>{n as number}</div>
-              <div style={{fontSize:9,color:'#5e5e6e',textTransform:'uppercase',letterSpacing:1}}>{l as string}</div>
+        <div style={{display:'flex',gap:20}}>
+          {([['fetched',comments.length,'#f0b429'],['approved',approved,'#3dd68c'],['posted',posted,'#a78bfa']] as [string,number,string][]).map(([l,n,c])=>(
+            <div key={l} style={{textAlign:'right'}}>
+              <div style={{fontFamily:'Fraunces,serif',fontSize:16,fontWeight:700,color:c}}>{n}</div>
+              <div style={{fontSize:9,color:'#555568',textTransform:'uppercase',letterSpacing:1}}>{l}</div>
             </div>
           ))}
         </div>
       </div>
 
-      <div style={{display:'grid',gridTemplateColumns:'280px 1fr',height:'calc(100vh - 55px)',overflow:'hidden'}}>
+      <div style={{display:'flex',flex:1,overflow:'hidden'}}>
 
-        {/* LEFT */}
-        <div style={{background:'#15151a',borderRight:'1px solid #27272f',overflowY:'auto',padding:18,display:'flex',flexDirection:'column',gap:16}}>
+        {/* ── LEFT SIDEBAR ── */}
+        <div style={{width:260,background:'#111118',borderRight:'1px solid #2e2e3a',overflowY:'auto',padding:16,display:'flex',flexDirection:'column',gap:14,flexShrink:0}}>
 
           {/* Connection */}
           <div>
-            <div style={{fontSize:9.5,textTransform:'uppercase',letterSpacing:1.5,color:'#5e5e6e',marginBottom:8}}>YouTube Connection</div>
-            {connected===null ? <div style={{color:'#5e5e6e',fontSize:11}}>Checking...</div>
-            : connected ? (
-              <div style={{background:'rgba(61,214,140,.1)',border:'1px solid rgba(61,214,140,.25)',borderRadius:8,padding:'9px 12px',fontSize:11,color:'#3dd68c'}}>
-                ✓ Connected · Auto-fetches daily at 8am UTC
-              </div>
-            ) : (
-              <a href="/api/auth/connect" style={{textDecoration:'none'}}>
-                <button style={{background:'#f0b429',color:'#000',width:'100%',fontWeight:700}}>🔗 Connect YouTube Account</button>
-              </a>
-            )}
+            <div style={{fontSize:9,textTransform:'uppercase',letterSpacing:1.5,color:'#555568',marginBottom:6}}>Connection</div>
+            {connected===null
+              ? <div style={{fontSize:11,color:'#555568'}}>Checking...</div>
+              : connected
+              ? <div style={{background:'#0d1a10',border:'1px solid #1a3a20',borderRadius:7,padding:'8px 10px',fontSize:11,color:'#3dd68c'}}>✓ Connected · Auto-fetches daily</div>
+              : <a href="/api/auth/connect" style={{textDecoration:'none',display:'block'}}>
+                  <button style={{background:'#f0b429',color:'#000',width:'100%',fontWeight:700,fontSize:12}}>🔗 Connect YouTube</button>
+                </a>
+            }
           </div>
 
-          <div style={{height:1,background:'#27272f'}}/>
+          <div style={{height:1,background:'#2e2e3a'}}/>
 
           {/* Fetch */}
           <div>
-            <div style={{fontSize:9.5,textTransform:'uppercase',letterSpacing:1.5,color:'#5e5e6e',marginBottom:8}}>Fetch Comments</div>
-            <div style={{marginBottom:9}}>
-              <label style={{fontSize:10.5,color:'#5e5e6e',display:'block',marginBottom:5}}>Batch size</label>
-              <select value={batchSize} onChange={e=>setBatchSize(+e.target.value)}>
-                <option value={20}>20 comments</option>
-                <option value={50}>50 comments</option>
-                <option value={100}>100 comments</option>
-                <option value={200}>200 comments</option>
-              </select>
-            </div>
+            <div style={{fontSize:9,textTransform:'uppercase',letterSpacing:1.5,color:'#555568',marginBottom:6}}>Fetch Comments</div>
+            <select value={batchSize} onChange={e=>setBatchSize(+e.target.value)} style={{marginBottom:8}}>
+              <option value={20}>20 comments</option>
+              <option value={50}>50 comments</option>
+              <option value={100}>100 comments</option>
+              <option value={200}>200 comments</option>
+            </select>
             <button onClick={fetchComments} disabled={!connected||loading}
-              style={{background:'#f0b429',color:'#000',width:'100%',fontWeight:700,padding:'9px',display:'flex',alignItems:'center',justifyContent:'center',gap:7}}>
-              {loading ? <><span style={{animation:'spin 1s linear infinite',display:'inline-block'}}>⟳</span> Fetching...</> : '📥 Fetch Unresponded'}
+              style={{background:'#f0b429',color:'#000',width:'100%',fontWeight:700}}>
+              {loading ? '⟳ Fetching...' : '📥 Fetch Unresponded'}
             </button>
           </div>
 
-          <div style={{height:1,background:'#27272f'}}/>
+          <div style={{height:1,background:'#2e2e3a'}}/>
 
-          {/* Filter by type */}
+          {/* Filter */}
           <div>
-            <div style={{fontSize:9.5,textTransform:'uppercase',letterSpacing:1.5,color:'#5e5e6e',marginBottom:8}}>Filter by Type</div>
-            <div style={{display:'flex',flexDirection:'column',gap:5}}>
-              {[
-                ['all','All Comments','#e4e4ec','rgba(228,228,236,.08)','💬'],
-                ['video_comment','Video Comments','#f0b429','rgba(240,180,41,.1)','📹'],
-                ['reply','Replies to Others','#38bdf8','rgba(56,189,248,.1)','↩️'],
-                ['community_post','Community Posts','#a78bfa','rgba(167,139,250,.1)','📢'],
-              ].map(([key,label,color,bg,icon]) => (
-                <button key={key} onClick={()=>setActiveFilter(key as any)}
-                  style={{background:activeFilter===key ? bg as string : 'transparent', color:activeFilter===key ? color as string : '#5e5e6e',
-                    border:`1px solid ${activeFilter===key ? color as string : '#27272f'}`,
-                    padding:'7px 10px',textAlign:'left',display:'flex',justifyContent:'space-between',alignItems:'center',borderRadius:7}}>
-                  <span>{icon} {label}</span>
-                  <span style={{background:'rgba(255,255,255,.08)',padding:'1px 7px',borderRadius:10,fontSize:10}}>
-                    {counts[key as keyof typeof counts] ?? 0}
-                  </span>
-                </button>
-              ))}
-            </div>
+            <div style={{fontSize:9,textTransform:'uppercase',letterSpacing:1.5,color:'#555568',marginBottom:6}}>Filter by Type</div>
+            {([['all','All','#aaaacc','💬'],['video_comment','Video','#f0b429','📹'],['reply','Replies','#38bdf8','↩️'],['community_post','Community','#a78bfa','📢']] as [string,string,string,string][]).map(([key,label,color,icon])=>(
+              <button key={key} onClick={()=>setFilter(key as any)}
+                style={{width:'100%',marginBottom:4,display:'flex',justifyContent:'space-between',
+                  background: filter===key ? color+'18' : 'transparent',
+                  color: filter===key ? color : '#666680',
+                  border:`1px solid ${filter===key ? color+'60' : '#2e2e3a'}`,
+                  padding:'6px 10px',textAlign:'left',borderRadius:6}}>
+                <span>{icon} {label}</span>
+                <span style={{background:'#ffffff12',borderRadius:10,padding:'0 6px',fontSize:10}}>
+                  {counts[key as keyof typeof counts]??0}
+                </span>
+              </button>
+            ))}
           </div>
 
-          <div style={{height:1,background:'#27272f'}}/>
+          <div style={{height:1,background:'#2e2e3a'}}/>
 
           {/* Generate */}
           <div>
-            <div style={{fontSize:9.5,textTransform:'uppercase',letterSpacing:1.5,color:'#5e5e6e',marginBottom:8}}>Generate Replies</div>
-            <textarea value={extra} onChange={e=>setExtra(e.target.value)} rows={3}
-              placeholder="Extra instructions (optional)" style={{marginBottom:9}}/>
+            <div style={{fontSize:9,textTransform:'uppercase',letterSpacing:1.5,color:'#555568',marginBottom:6}}>Generate</div>
+            <textarea value={extra} onChange={e=>setExtra(e.target.value)} rows={2}
+              placeholder="Extra instructions..." style={{marginBottom:8,fontSize:11}}/>
             <button onClick={generateAll} disabled={!comments.length}
-              style={{background:'transparent',color:'#e4e4ec',border:'1px solid #27272f',width:'100%',padding:'9px'}}>
-              ✨ Generate All Replies
+              style={{background:'#1e1e2e',color:'#ccccee',border:'1px solid #2e2e3a',width:'100%'}}>
+              ✨ Generate All
             </button>
           </div>
 
-          <div style={{height:1,background:'#27272f'}}/>
+          <div style={{height:1,background:'#2e2e3a'}}/>
 
           {/* Post */}
-          <div>
-            <div style={{fontSize:9.5,textTransform:'uppercase',letterSpacing:1.5,color:'#5e5e6e',marginBottom:8}}>Review & Post</div>
-            <div style={{display:'flex',flexDirection:'column',gap:7}}>
-              <button onClick={approveAll} disabled={!comments.length}
-                style={{background:'transparent',color:'#e4e4ec',border:'1px solid #27272f',padding:'8px'}}>
-                ✓ Approve All Generated
-              </button>
-              <button onClick={postApproved} disabled={!comments.some(c=>c.status==='approved')}
-                style={{background:'rgba(61,214,140,.12)',color:'#3dd68c',border:'1px solid rgba(61,214,140,.25)',padding:'8px',fontWeight:600}}>
-                🚀 Post All Approved
-              </button>
-              <button onClick={()=>setComments(cs=>cs.map(c=>c.status==='pending'?{...c,status:'skipped'}:c))}
-                style={{background:'rgba(232,93,74,.1)',color:'#e85d4a',border:'1px solid rgba(232,93,74,.25)',padding:'8px'}}>
-                ⏭ Skip Remaining
-              </button>
-            </div>
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            <button onClick={()=>setComments(cs=>cs.map(c=>c.status==='pending'&&c.reply?{...c,status:'approved'}:c))}
+              style={{background:'#1e1e2e',color:'#ccccee',border:'1px solid #2e2e3a',width:'100%'}}>
+              ✓ Approve All
+            </button>
+            <button onClick={postApproved} disabled={approved===0}
+              style={{background:'#0d2a1a',color:'#3dd68c',border:'1px solid #1a4a2a',width:'100%',fontWeight:700}}>
+              🚀 Post Approved ({approved})
+            </button>
+            <button onClick={()=>setComments(cs=>cs.map(c=>c.status==='pending'?{...c,status:'skipped'}:c))}
+              style={{background:'#1a0d0d',color:'#e85d4a',border:'1px solid #3a1a1a',width:'100%'}}>
+              ⏭ Skip Remaining
+            </button>
           </div>
 
-          <div style={{height:1,background:'#27272f'}}/>
+          <div style={{height:1,background:'#2e2e3a'}}/>
 
           {/* Log */}
           <div>
-            <div style={{fontSize:9.5,textTransform:'uppercase',letterSpacing:1.5,color:'#5e5e6e',marginBottom:8}}>Log</div>
-            <div style={{background:'#1c1c23',border:'1px solid #27272f',borderRadius:8,padding:'9px 11px',fontSize:10.5,maxHeight:130,overflowY:'auto',lineHeight:1.9}}>
-              {log.length===0 ? <span style={{color:'#5e5e6e'}}>Ready.</span> : log.map((l,i)=>(
-                <div key={i} style={{color:l.c==='ok'?'#3dd68c':l.c==='err'?'#e85d4a':'#f0b429'}}>[{l.t}] {l.m}</div>
-              ))}
+            <div style={{fontSize:9,textTransform:'uppercase',letterSpacing:1.5,color:'#555568',marginBottom:6}}>Log</div>
+            <div style={{background:'#0c0c14',border:'1px solid #2e2e3a',borderRadius:6,padding:'8px',fontSize:10,maxHeight:120,overflowY:'auto',lineHeight:1.8,color:'#888899'}}>
+              {log.length===0 ? 'Ready.' : log.map((l,i)=><div key={i}>{l}</div>)}
             </div>
           </div>
         </div>
 
-        {/* RIGHT */}
-        <div style={{display:'flex',flexDirection:'column',overflow:'hidden'}}>
-          {/* Toolbar */}
-          <div style={{background:'#15151a',borderBottom:'1px solid #27272f',padding:'10px 18px',display:'flex',alignItems:'center',gap:10}}>
-            <div style={{flex:1,display:'flex',alignItems:'center',gap:10}}>
-              <div style={{flex:1,height:3,background:'#1c1c23',borderRadius:2,overflow:'hidden'}}>
-                <div style={{height:'100%',background:'#f0b429',borderRadius:2,width:pct+'%',transition:'width .4s'}}/>
-              </div>
-              <span style={{fontSize:10,color:'#5e5e6e',whiteSpace:'nowrap'}}>{done} / {comments.length}</span>
+        {/* ── MAIN PANEL ── */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}}>
+
+          {/* Progress bar */}
+          <div style={{background:'#111118',borderBottom:'1px solid #2e2e3a',padding:'8px 16px',display:'flex',alignItems:'center',gap:10,flexShrink:0}}>
+            <div style={{flex:1,height:3,background:'#2e2e3a',borderRadius:2}}>
+              <div style={{height:'100%',background:'#f0b429',borderRadius:2,width:pct+'%',transition:'width .4s'}}/>
             </div>
-            <button onClick={approveAll} style={{background:'transparent',color:'#e4e4ec',border:'1px solid #27272f',fontSize:10.5,padding:'6px 12px'}}>✓ Approve All</button>
+            <span style={{fontSize:10,color:'#555568',whiteSpace:'nowrap'}}>{done} / {comments.length}</span>
           </div>
 
-          {/* Comment list */}
-          <div style={{flex:1,overflowY:'auto',padding:'14px 16px',display:'flex',flexDirection:'column',gap:10}}>
+          {/* Comments */}
+          <div style={{flex:1,overflowY:'auto',padding:14,display:'flex',flexDirection:'column',gap:8}}>
             {filtered.length===0 ? (
-              <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',gap:10,color:'#5e5e6e',textAlign:'center',padding:40}}>
-                <div style={{fontSize:44,opacity:.25}}>💬</div>
-                <div style={{fontFamily:'Fraunces,serif',fontSize:18,color:'#e4e4ec',opacity:.4}}>
-                  {comments.length===0 ? 'No comments loaded' : `No ${activeFilter.replace('_',' ')}s`}
-                </div>
-                <div style={{fontSize:11,lineHeight:1.65,maxWidth:280}}>
-                  {comments.length===0 ? 'Connect YouTube and fetch comments to start.' : 'Switch filter to see other comment types.'}
+              <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',height:'100%',gap:8,color:'#444455',textAlign:'center'}}>
+                <div style={{fontSize:48}}>💬</div>
+                <div style={{fontSize:16,color:'#666680'}}>{comments.length===0 ? 'No comments loaded' : 'No comments in this filter'}</div>
+                <div style={{fontSize:11,color:'#444455'}}>
+                  {comments.length===0 ? 'Connect YouTube and click Fetch.' : 'Select a different filter.'}
                 </div>
               </div>
-            ) : filtered.map((c,fi) => {
-              const gi = comments.indexOf(c);
-              return <CommentCard key={c.id} c={c} onGenerate={()=>generateOne(gi)}
-                onApprove={(t)=>approveOne(gi,t)} onPost={()=>postOne(gi)}
-                onSkip={()=>setComments(cs=>cs.map((x,j)=>j===gi?{...x,status:'skipped'}:x))}
-                onChange={(reply)=>setComments(cs=>cs.map((x,j)=>j===gi?{...x,reply}:x))}/>;
-            })}
+            ) : filtered.map(c => (
+              <CommentCard
+                key={c.id}
+                c={c}
+                onGenerate={() => generateOne(c.id, c)}
+                onApprove={(text) => updateComment(c.id, {status:'approved', reply:text||c.reply})}
+                onPost={() => postOne(c)}
+                onSkip={() => updateComment(c.id, {status:'skipped'})}
+                onChange={(reply) => updateComment(c.id, {reply})}
+              />
+            ))}
           </div>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
-function CommentCard({c,onGenerate,onApprove,onPost,onSkip,onChange}:{
-  c:Comment; onGenerate:()=>void; onApprove:(t:string)=>void;
-  onPost:()=>void; onSkip:()=>void; onChange:(t:string)=>void;
+function CommentCard({c,onGenerate,onApprove,onPost,onSkip,onChange}: {
+  c: Comment;
+  onGenerate: ()=>void;
+  onApprove: (t:string)=>void;
+  onPost: ()=>void;
+  onSkip: ()=>void;
+  onChange: (t:string)=>void;
 }) {
-  const tc = TYPE_CONFIG[c.type];
-  const bdr = c.status==='approved'?'#3dd68c':c.status==='posted'?'#3dd68c':'#333340';
+  const typeColor = TYPE_COLORS[c.type];
+  const statusColor = STATUS_COLOR[c.status];
+  const isPosted = c.status === 'posted';
+  const isSkipped = c.status === 'skipped';
+  const isApproved = c.status === 'approved';
+  const isGenerating = c.status === 'generating';
 
   return (
     <div style={{
-      border:`1px solid ${bdr}`,
-      borderRadius:8,
-      marginBottom:4,
-      overflow:'hidden',
-      opacity: c.status==='skipped'?0.4:1,
-      fontFamily:'monospace',
+      border: isPosted ? '1px solid #1a4a2a' : isApproved ? '1px solid #2a4a2a' : '1px solid #2e2e3a',
+      borderRadius: 8,
+      overflow: 'hidden',
+      opacity: isSkipped ? 0.4 : 1,
+      background: '#111118',
     }}>
-      {/* TOP BAR */}
+
+      {/* Type + meta row */}
       <div style={{
-        padding:'6px 12px',
-        display:'flex',
-        justifyContent:'space-between',
-        alignItems:'center',
-        background: c.type==='video_comment'?'#1a1a10':c.type==='reply'?'#0d1620':'#120d20',
-        borderBottom:'1px solid #333340',
+        padding: '5px 12px',
+        background: '#0d0d16',
+        borderBottom: '1px solid #2e2e3a',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
       }}>
-        <span style={{fontSize:11,fontWeight:'bold',color:tc.color}}>
-          {tc.icon} {c.typeLabel}
+        <span style={{fontSize:10,fontWeight:700,color:typeColor,letterSpacing:.5}}>
+          {TYPE_ICONS[c.type]} {c.typeLabel.toUpperCase()}
         </span>
-        <span style={{fontSize:10,color:'#888'}}>{timeAgo(c.publishedAt)}</span>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <span style={{fontSize:9,color:'#555568'}}>{timeAgo(c.publishedAt)}</span>
+          <span style={{
+            fontSize:9,padding:'2px 7px',borderRadius:10,fontWeight:600,
+            background:statusColor+'20',color:statusColor,
+            animation:isGenerating?'pulse 1.4s infinite':undefined,
+          }}>
+            {STATUS_LABEL[c.status]}
+          </span>
+        </div>
       </div>
 
-      {/* PARENT CONTEXT for replies */}
+      {/* Parent context */}
       {c.type==='reply' && c.parentText && (
-        <div style={{padding:'5px 12px',background:'#0a0a14',borderBottom:'1px solid #222'}}>
-          <span style={{fontSize:11,color:'#38bdf8'}}>↩ {c.parentAuthor}: </span>
-          <span style={{fontSize:11,color:'#777'}}>"{c.parentText}"</span>
+        <div style={{padding:'6px 12px',background:'#0a0e14',borderBottom:'1px solid #1e2e3a',fontSize:11,lineHeight:1.5}}>
+          <span style={{color:'#38bdf8',fontWeight:600}}>↩ {c.parentAuthor}: </span>
+          <span style={{color:'#555580'}}>"{c.parentText}"</span>
         </div>
       )}
 
-      {/* COMMENT BODY */}
-      <div style={{padding:'10px 12px',background:'#111118',borderBottom:'1px solid #222'}}>
+      {/* Comment */}
+      <div style={{padding:'12px',display:'flex',gap:10}}>
+        {/* Avatar */}
         <div style={{
-          fontSize:12,
-          fontWeight:'bold',
-          color:'#ffffff',
-          marginBottom:4,
+          width:34,height:34,borderRadius:'50%',flexShrink:0,
+          background: typeColor+'22',
+          border:`1px solid ${typeColor}44`,
+          display:'flex',alignItems:'center',justifyContent:'center',
+          fontSize:15,fontWeight:700,color:typeColor,fontFamily:'serif',
         }}>
-          {c.author}
-          {c.videoTitle && c.type!=='community_post' && (
-            <span style={{fontWeight:'normal',fontSize:10,color:'#666',marginLeft:8}}>
-              on: {c.videoTitle.substring(0,50)}
-            </span>
+          {(c.firstName||c.author||'?').charAt(0).toUpperCase()}
+        </div>
+        {/* Content */}
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:13,color:'#ffffff',marginBottom:2}}>
+            {c.author}
+          </div>
+          {c.videoTitle && c.type !== 'community_post' && (
+            <div style={{fontSize:10,color:'#555568',marginBottom:5,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+              📹 {c.videoTitle}
+            </div>
+          )}
+          <div style={{fontSize:13,color:'#ccccdd',lineHeight:1.6,wordBreak:'break-word'}}>
+            {c.text}
+          </div>
+          {c.likes>0 && (
+            <div style={{fontSize:10,color:'#555568',marginTop:4}}>👍 {c.likes}</div>
           )}
         </div>
-        <div style={{
-          fontSize:13,
-          color:'#dddddd',
-          lineHeight:1.5,
-          wordBreak:'break-word',
-          whiteSpace:'pre-wrap',
-        }}>
-          {c.text || '(no text)'}
-        </div>
-        {c.likes>0 && <div style={{fontSize:10,color:'#666',marginTop:4}}>👍 {c.likes}</div>}
       </div>
 
-      {/* REPLY AREA */}
-      {c.status!=='skipped' && c.status!=='posted' && (
-        <div style={{padding:'10px 12px',background:'#0c0c14'}}>
+      {/* Reply zone */}
+      {!isSkipped && !isPosted && (
+        <div style={{padding:'10px 12px',background:'#0c0c14',borderTop:'1px solid #1e1e2e'}}>
           <textarea
             value={c.reply}
-            onChange={e=>onChange(e.target.value)}
+            onChange={e => onChange(e.target.value)}
             placeholder="Write or generate a reply..."
             rows={2}
             style={{
               width:'100%',
-              background:'#1a1a28',
-              color:'#ffffff',
-              border:'1px solid #333',
+              background:'#16161e',
+              color:'#e8e8f8',
+              border:'1px solid #2e2e3a',
               borderRadius:6,
-              padding:'7px 10px',
-              fontSize:12,
-              fontFamily:'monospace',
+              padding:'8px 10px',
+              fontSize:12.5,
+              fontFamily:'DM Mono,monospace',
               lineHeight:1.5,
               resize:'vertical',
               display:'block',
@@ -412,35 +398,35 @@ function CommentCard({c,onGenerate,onApprove,onPost,onSkip,onChange}:{
           />
           <div style={{display:'flex',gap:6}}>
             <button onClick={onGenerate}
-              style={{flex:1,background:'#222',color:'#ccc',border:'1px solid #444',borderRadius:6,padding:'7px',fontSize:11,cursor:'pointer'}}>
-              ✨ Generate
+              style={{flex:1,background:'#1a1a28',color:'#9999bb',border:'1px solid #2e2e3a',padding:'7px',fontSize:11}}>
+              ✨ Gen
             </button>
-            {c.status==='approved'
+            {isApproved
               ? <button onClick={onPost}
-                  style={{flex:2,background:'#0d2a1a',color:'#3dd68c',border:'1px solid #3dd68c',borderRadius:6,padding:'7px',fontSize:11,fontWeight:'bold',cursor:'pointer'}}>
+                  style={{flex:2,background:'#0d2a1a',color:'#3dd68c',border:'1px solid #1a4a2a',padding:'7px',fontSize:11,fontWeight:700}}>
                   🚀 Post Reply
                 </button>
               : <button onClick={()=>onApprove(c.reply)}
-                  style={{flex:2,background:'#0d2a1a',color:'#3dd68c',border:'1px solid #2a5a3a',borderRadius:6,padding:'7px',fontSize:11,cursor:'pointer'}}>
+                  style={{flex:2,background:'#111e18',color:'#3dd68c',border:'1px solid #1a3a20',padding:'7px',fontSize:11}}>
                   ✓ Approve
                 </button>
             }
             <button onClick={onSkip}
-              style={{flex:1,background:'#1a0d0d',color:'#e85d4a',border:'1px solid #3a2020',borderRadius:6,padding:'7px',fontSize:11,cursor:'pointer'}}>
+              style={{flex:1,background:'#180e0e',color:'#e85d4a',border:'1px solid #2e1a1a',padding:'7px',fontSize:11}}>
               ✗ Skip
             </button>
           </div>
         </div>
       )}
 
-      {c.status==='posted' && (
-        <div style={{padding:'8px 12px',background:'#0a1a10',fontSize:11,color:'#3dd68c'}}>
-          ✓ Reply posted: {c.reply}
+      {isPosted && (
+        <div style={{padding:'8px 12px',background:'#091410',borderTop:'1px solid #1a3a20',fontSize:11,color:'#3dd68c'}}>
+          ✓ {c.reply}
         </div>
       )}
 
-      {c.status==='skipped' && (
-        <div style={{padding:'6px 12px',background:'#111',fontSize:10,color:'#555'}}>
+      {isSkipped && (
+        <div style={{padding:'6px 12px',background:'#0e0e14',borderTop:'1px solid #2e2e3a',fontSize:10,color:'#444455'}}>
           skipped
         </div>
       )}
@@ -448,11 +434,11 @@ function CommentCard({c,onGenerate,onApprove,onPost,onSkip,onChange}:{
   );
 }
 
-function timeAgo(iso:string){
-  if(!iso)return'';
-  const s=Math.floor((Date.now()-new Date(iso).getTime())/1000);
-  if(s<60)return'just now';
-  if(s<3600)return Math.floor(s/60)+'m ago';
-  if(s<86400)return Math.floor(s/3600)+'h ago';
+function timeAgo(iso: string) {
+  if (!iso) return '';
+  const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60)+'m ago';
+  if (s < 86400) return Math.floor(s/3600)+'h ago';
   return Math.floor(s/86400)+'d ago';
 }
