@@ -4,7 +4,14 @@ import sql from '@/lib/db';
 
 export async function GET(req: NextRequest) {
   const code = req.nextUrl.searchParams.get('code');
+  const error = req.nextUrl.searchParams.get('error');
+
+  if (error === 'access_denied') {
+    return NextResponse.redirect(new URL('/?error=access_denied', req.url));
+  }
+
   if (!code) return NextResponse.json({ error: 'No code' }, { status: 400 });
+
   try {
     const oauth2Client = getOAuthClient();
     const { tokens } = await oauth2Client.getToken(code);

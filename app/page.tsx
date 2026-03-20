@@ -37,7 +37,9 @@ export default function Home() {
     });
     const p = new URLSearchParams(window.location.search);
     if (p.get('connected')==='true') { setConnected(true); window.history.replaceState({},'','/'); }
-    if (p.get('error')) addLog('Auth error: '+p.get('error'), 'err');
+    const err = p.get('error');
+    if (err === 'access_denied') addLog('⚠ Access denied — add music@nathanielschool.com as test user at: console.cloud.google.com/auth/audience?project=jz-comment-studio', 'err');
+    else if (err) addLog('Auth error: '+err, 'err');
   }, []);
 
   const filtered = activeFilter === 'all' ? comments : comments.filter(c => c.type === activeFilter);

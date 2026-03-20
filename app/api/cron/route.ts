@@ -2,24 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import { fetchUnrespondedComments } from '@/lib/youtube';
 import sql from '@/lib/db';
 
-// Vercel cron - runs daily at 8am UTC
-// Add to vercel.json: { "crons": [{ "path": "/api/cron", "schedule": "0 8 * * *" }] }
 export async function GET(req: NextRequest) {
-  // Protect endpoint with CRON_SECRET
+  // Allow Vercel's internal cron (no auth header) OR secret header
+  const isVercelCron = req.headers.get('x-vercel-cron') === '1';
   const authHeader = req.headers.get('authorization');
-  if (process.env.NODE_ENV === 'production' && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  const secret = process.env.CRON_SECRET || 'OebzkukOLP8N+90adiv/YFqioDm7JPstOht8T4aiDGw=';
+  const isAuthorized = isVercelCron || authHeader === `Bearer ${secret}`;
+
+  if (!isAuthorized) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   try {
     const comments = await fetchUnrespondedComments(100);
-
-    // Store last fetch time and count
     await sql`
       INSERT INTO cron_log (fetched_at, comment_count)
       VALUES (NOW(), ${comments.length})
     `;
-
     return NextResponse.json({
       ok: true,
       fetched: comments.length,
