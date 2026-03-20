@@ -6,7 +6,6 @@ import sql from '@/lib/db';
 export async function GET() {
   const results: any = {};
 
-  // 1. Check token in DB
   try {
     const rows = await sql`SELECT email, expiry_date, updated_at FROM yt_tokens LIMIT 1`;
     results.token = rows.length ? {
@@ -18,63 +17,67 @@ export async function GET() {
     } : { found: false };
   } catch(e: any) { results.token = { error: e.message }; }
 
-  // 2. Auth + force refresh
   try {
     const auth = await getAuthenticatedClient();
     results.auth = 'ok';
-
     const youtube = google.youtube({ version: 'v3', auth });
 
-    // 3. Channel
+    // Check token info - what scopes does it have?
     try {
-      const ch = await youtube.channels.list({ part: ['snippet','statistics'], id: ['UCCI37YB3l21oq_sLoc92YfA'] });
-      results.channel = { name: ch.data.items?.[0]?.snippet?.title, subs: ch.data.items?.[0]?.statistics?.subscriberCount };
-    } catch(e: any) { results.channel = { error: e.message }; }
+      const oauth2 = google.oauth2({ version: 'v2', auth });
+      const info = await oauth2.tokeninfo({});
+      results.tokenScopes = info.data.scope;
+      results.tokenEmail = info.data.email;
+    } catch(e: any) { results.tokenScopes = { error: e.message }; }
 
-    // 4. Recent videos
+    // Try fetching comments WITHOUT moderationStatus filter
     try {
-      const s = await youtube.search.list({ part: ['id'], channelId: 'UCCI37YB3l21oq_sLoc92YfA', type: ['video'], order: 'date', maxResults: 3 });
-      results.videoIds = (s.data.items||[]).map((i:any) => i.id?.videoId).filter(Boolean);
-    } catch(e: any) { results.videoIds = { error: e.message }; }
-
-    // 5. Comments on first video - with ALL parts
-    if (Array.isArray(results.videoIds) && results.videoIds.length) {
-      try {
-        const ct = await youtube.commentThreads.list({
-          part: ['snippet', 'replies'],
-          videoId: results.videoIds[0],
-          maxResults: 10,
-          order: 'time',
-          moderationStatus: 'published',
-        });
-        results.commentsOnFirstVideo = {
-          totalItems: ct.data.pageInfo?.totalResults,
-          returned: ct.data.items?.length,
-          sample: (ct.data.items||[]).slice(0,3).map((t:any) => ({
-            id: t.snippet?.topLevelComment?.id,
-            author: t.snippet?.topLevelComment?.snippet?.authorDisplayName,
-            authorChannelId: t.snippet?.topLevelComment?.snippet?.authorChannelId?.value,
-            text: t.snippet?.topLevelComment?.snippet?.textDisplay?.substring(0,60),
-            hasSnippet: !!t.snippet?.topLevelComment?.snippet,
-          }))
-        };
-      } catch(e: any) { results.commentsOnFirstVideo = { error: e.message }; }
-    }
-
-    // 6. Check posted_replies
-    try {
-      const p = await sql`SELECT COUNT(*) as n FROM posted_replies`;
-      results.postedRepliesInDB = Number(p[0]?.n);
-    } catch(e: any) { results.postedRepliesInDB = { error: e.message }; }
-
-    // 7. Check token expiry AFTER refresh
-    try {
-      const rows = await sql`SELECT expiry_date FROM yt_tokens WHERE email = 'music@nathanielschool.com'`;
-      results.tokenAfterRefresh = {
-        expires: new Date(Number(rows[0]?.expiry_date)).toISOString(),
-        valid: Date.now() < Number(rows[0]?.expiry_date),
+      const ct = await youtube.commentThreads.list({
+        part: ['snippet', 'replies'],
+        videoId: 'GMHVb7xhRZM',
+        maxResults: 5,
+      });
+      results.video1_noFilter = {
+        total: ct.data.pageInfo?.totalResults,
+        returned: ct.data.items?.length,
+        sample: ct.data.items?.slice(0,2).map((t:any) => ({
+          text: t.snippet?.topLevelComment?.snippet?.textDisplay?.substring(0,50),
+          author: t.snippet?.topLevelComment?.snippet?.authorDisplayName,
+        }))
       };
-    } catch(e: any) { results.tokenAfterRefresh = { error: e.message }; }
+    } catch(e: any) { results.video1_noFilter = { error: e.message }; }
+
+    // Try a known older popular video
+    try {
+      const ct2 = await youtube.commentThreads.list({
+        part: ['snippet'],
+        videoId: '5N7ZDWh2u7A',
+        maxResults: 5,
+      });
+      results.video3_comments = {
+        total: ct2.data.pageInfo?.totalResults,
+        returned: ct2.data.items?.length,
+      };
+    } catch(e: any) { results.video3_comments = { error: e.message }; }
+
+    // Try allThreadsRelatedToChannelId - this is the most permissive
+    try {
+      const all = await youtube.commentThreads.list({
+        part: ['snippet', 'replies'],
+        allThreadsRelatedToChannelId: 'UCCI37YB3l21oq_sLoc92YfA',
+        maxResults: 10,
+      });
+      results.allThreads = {
+        total: all.data.pageInfo?.totalResults,
+        returned: all.data.items?.length,
+        sample: all.data.items?.slice(0,3).map((t:any) => ({
+          text: t.snippet?.topLevelComment?.snippet?.textDisplay?.substring(0,60),
+          author: t.snippet?.topLevelComment?.snippet?.authorDisplayName,
+          videoId: t.snippet?.topLevelComment?.snippet?.videoId,
+          hasVideoId: !!t.snippet?.topLevelComment?.snippet?.videoId,
+        }))
+      };
+    } catch(e: any) { results.allThreads = { error: e.message }; }
 
   } catch(e: any) { results.auth = { error: e.message }; }
 
